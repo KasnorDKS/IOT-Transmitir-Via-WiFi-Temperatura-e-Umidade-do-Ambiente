@@ -94,7 +94,6 @@ void setup() {
     digitalWrite(MQTT_Led, HIGH);
     Serial.println("Conectado ao Broker.");
   }
-
 }
 
 void loop() {
@@ -194,9 +193,9 @@ void loop() {
     }
 
     char jsonBuffer[100]; // Espaço para armazenar a string JSON
-    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"temperatura\":%.2f,\"umidade\":%.2f}", temp, umidade);
-
-    if (mqttClient.publish("senai1", jsonBuffer)) {
+    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"temperatura\":%.2f,\"umidade\":%.2f}", temp, umidade); // Mensagem que será enviada
+    // Irá publicar no tópico a mensagem em formato json e fazer uma verificação de envio
+    if (mqttClient.publish("senai", jsonBuffer)) {
       Serial.println("\nMensagem MQTT publicada com sucesso.");
     } else {
       Serial.println("\nFalha ao publicar mensagem MQTT.");
