@@ -1,7 +1,8 @@
 #include <LiquidCrystal_I2C.h>
 #include <DHTesp.h>
-#include <WiFi.h>
 #include <HTTPClient.h>
+#include "WiFi.h"
+#include "PubSubClient.h"
 
 #define I2C_ADDR    0x27  // Declaração do endereço I2C padrão
 #define LCD_COLUMNS 16    // Quantidade de colunas que o LCD possui
@@ -12,6 +13,13 @@ LiquidCrystal_I2C lcd(I2C_ADDR, LCD_COLUMNS, LCD_LINES);
 const char* ssid = "Wokwi-GUEST";  // Nome da rede que irá se conectar
 const char* password = "";         // Senha da rede
 
+const char* domain = "broker.hivemq.com";
+int port = 1883;
+
+WiFiClient client;
+
+PubSubClient mqttClient(client);
+
 const char* thingSpeakAPIKey = "QET4276RZFCFDA5L";              // Chave da API 
 const char* thingSpeakURL = "http://api.thingspeak.com/update"; // URL do site
 
@@ -19,7 +27,8 @@ const int dhtPin = 13;    // Pino digital de dados do DHT22 conectado na entrada
 const int pinoLed1 = 12;  // Pino positivo do Led Amarelo conectado na entrada D12 do ESP32
 const int pinoLed2 = 14;  // Pino positivo do Led Azul Ciano conectado na entrada D14 do ESP32
 const int pinoLed3 = 27;  // Pino positivo do Led Vermelho conectado na entrada D27 do ESP32
-const int WAN_Led = 26;   // Define o pino positivo do Led Verde para indicar a Internet 
+const int WAN_Led = 26;   // Define o pino positivo do Led Verde Escuro para indicar a Internet 
+const int MQTT_Led = 25;  // Define o pino positivo do Led Verde Claro para indicar a conexão MQTT
 
 DHTesp sensor;
 
@@ -32,7 +41,7 @@ const unsigned long lcdInterval = 5000;        // Intervalo de atualização do 
 const unsigned long ledIntervalNormal = 1000;  // Intervalo normal de piscar dos LEDs (1 segundo)
 const unsigned long ledIntervalHighTemp = 500; // Intervalo de piscar dos LEDs quando a temperatura está acima de 70°C (0.5 segundo)
 
-const unsigned long thingSpeakUpdateInterval = 60000;  // Intervalo de atualização para enviar dados ao ThingSpeak (em milissegundos)
+const unsigned long thingSpeakUpdateInterval = 5000;  // Intervalo de atualização para enviar dados ao ThingSpeak (10 segundos)
 
 float temp = 0;      // Variável para armazenar a temperatura do DHT22
 float umidade = 0;   // Variável para armazenar a umidade do DHT22
@@ -46,20 +55,58 @@ void setup() {
   pinMode(pinoLed2, OUTPUT);
   pinMode(pinoLed3, OUTPUT);
   pinMode(WAN_Led, OUTPUT);
+  pinMode(MQTT_Led, OUTPUT);
 
   lcd.init();       // Inicia o LCD
   lcd.backlight();  // Inicia a luz do LCD
+
+  WiFi.begin(ssid, password); // Irá conectar-se à rede Wifi
+
+  // Enquanto não se conectar à rede, irá aparecer uma mensagem dizendo que está se conectando
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connectando-se à Internet Wifi...");
+  }
+  Serial.println("Conectado.");
+  // Caso a internet esteja conectada, o Led Verde Escuro irá ligar
+  if (WiFi.status() == WL_CONNECTED){
+    digitalWrite(WAN_Led, HIGH);
+  }
+
+  mqttClient.setServer(domain, port); // Conecta-se ao servidor
+
+  Serial.println("Conectando-se ao Broker...");
+  
+  mqttClient.connect("username1");  // Tenta se conectar com um client id
+
+  // Caso não consiga se conectar, irá gerar um outro client id
+  while(!mqttClient.connected()){ 
+    String clientid = "username-"; // Início do client id
+    clientid += String(random(0xffff), HEX); // Chave aleatória no final do client id
+    if(mqttClient.connect(clientid.c_str())){
+      Serial.println("Conectado ao Broker");
+    } else {
+      Serial.println("Não conectado.");
+    }
+  }
+  // Se a Conexão for bem-sucedida, irá ligar o Led Verde Claro e mostrar uma mensagem no console
+  if(mqttClient.connected()){
+    digitalWrite(MQTT_Led, HIGH);
+    Serial.println("Conectado ao Broker.");
+  }
+
 }
 
 void loop() {
   unsigned long currentMillis = millis();  // Tempo atual em milissegundos
 
+  temp = sensor.getTemperature();   // Armazena a temperatura do DHT22
+  umidade = sensor.getHumidity();   // Armazena a umidade do DHT22
+
   // Atualiza o LCD a cada 5 segundos
   if (currentMillis - previousLCDUpdate >= lcdInterval) {
     previousLCDUpdate = currentMillis;
-    temp = sensor.getTemperature();   // Armazena a temperatura do DHT22
-    umidade = sensor.getHumidity();   // Armazena a umidade do DHT22
-
+    
     if (temp >= -40 && umidade >= 0) {
       lcd.setCursor(0, 0);                              // Seleciona o ponto de partida para a escrita na primeira linha
       lcd.println("Temp.: " + String(temp) + " C");     // Irá mostrar a temperatura em tempo real
@@ -123,45 +170,36 @@ void loop() {
     }
   }
 
-  // IRÁ DEMORAR EM TORNO DE 1 MINUTO PARA CONECTAR-SE À REDE WOKWI
   if (currentMillis - previousThingSpeakUpdate >= thingSpeakUpdateInterval) {
     previousThingSpeakUpdate = currentMillis;
 
-    WiFi.begin(ssid, password); // Irá conectar-se à rede Wifi
-
-    // Enquanto não se conectar à rede, irá aparecer uma mensagem dizendo que está se conectando
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(1000);
-      Serial.println("Connecting to WiFi...");
-    }
-
-    // Caso a internet esteja conectada, o Led Verde irá ligar
-    if (WiFi.status() == WL_CONNECTED){
-      digitalWrite(WAN_Led, HIGH);
-    }
-
     // Irá mandar essas informações para o site da Thing Speak
-    String thingSpeakData = "api_key=" + String(thingSpeakAPIKey) + // Chave da API
+    String dadosThingSpeak = "api_key=" + String(thingSpeakAPIKey) + // Chave da API
                             "&field1=" + String(temp) +             // Campo 1 = Temperatura
                             "&field2=" + String(umidade);           // Campo 2 = Umidade
 
-    HTTPClient http; // Irá iniciar o protocolo HTTP
-    http.begin(thingSpeakURL); // Irá se conectar ao site da Thing Speak
+    HTTPClient http; // Irá nomear a função HTTPClient
+    http.begin(thingSpeakURL); // Irá iniciar o protocolo HTTP e se conectar ao site da Thing Speak
     http.addHeader("Content-Type", "application/x-www-form-urlencoded"); // Irá ler o conteúdo e encapsulá-lo
-    int httpResponseCode = http.POST(thingSpeakData); // Define a reposta do HTTP
+    int httpResponseCode = http.POST(dadosThingSpeak); // Define a reposta do HTTP
     
     // Caso a resposta esteja entre 200 e 299, irá retornar como conexão bem-sucedida
     if (httpResponseCode >= 200 && httpResponseCode < 300) {
-      Serial.print("Conexão com ThingSpeak bem-sucedida. Resposta HTTP: ");
-      Serial.println(httpResponseCode);
-    } 
+      Serial.print("Mensagem HTTP enviada ao ThingSpeak com sucesso.");
+    }
     // Caso a resposta seja qualquer outro valor, irá retornar como conexão mal-sucedida
     else {
-      Serial.print("Erro ao enviar informações ao ThingSpeak. Resposta HTTP: ");
+      Serial.print("Erro ao enviar dados ao ThingSpeak. Código de resposta HTTP: ");
       Serial.println(httpResponseCode);
     }
-    http.end(); // Finaliza a conexão com o site
 
-    WiFi.disconnect(); // Finaliza a conexão com a rede
+    char jsonBuffer[100]; // Espaço para armazenar a string JSON
+    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"temperatura\":%.2f,\"umidade\":%.2f}", temp, umidade);
+
+    if (mqttClient.publish("senai1", jsonBuffer)) {
+      Serial.println("\nMensagem MQTT publicada com sucesso.");
+    } else {
+      Serial.println("\nFalha ao publicar mensagem MQTT.");
+    }
   }
 }
